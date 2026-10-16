@@ -405,8 +405,11 @@
       rimLight.color.set(preset.accentColor);
       pointLight.color.set(preset.accentColor);
       outerRingMat.color.set(preset.accentColor);
-      innerRingMat.color.set(preset.accentColor);
-      sparklesMat.color.set(preset.accentColor);
+      if (typeof pmremGen !== 'undefined' && typeof envScene !== 'undefined') {
+        eLight1.color.set(preset.color);
+        eLight2.color.set(preset.accentColor);
+        scene.environment = pmremGen.fromScene(envScene).texture;
+      }
     }
 
     // Three.js Scene Setup
@@ -418,11 +421,14 @@
     const initialPos = new THREE.Vector3(3.8, 2.5, 4.3);
     camera.position.copy(initialPos);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+    renderer.outputEncoding = THREE.sRGBEncoding;
     container.appendChild(renderer.domElement);
 
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -432,11 +438,27 @@
     controls.maxDistance = 11;
     controls.maxPolarAngle = Math.PI / 2 + 0.05;
 
+    // Generate Studio Environment Map for Physical Reflections
+    const pmremGen = new THREE.PMREMGenerator(renderer);
+    pmremGen.compileEquirectangularShader();
+    const envScene = new THREE.Scene();
+    envScene.background = new THREE.Color('#08090e');
+    const eLight1 = new THREE.PointLight(currentPreset.color, 14, 12);
+    eLight1.position.set(4, 5, 4);
+    envScene.add(eLight1);
+    const eLight2 = new THREE.PointLight(currentPreset.accentColor, 12, 12);
+    eLight2.position.set(-4, 3, -4);
+    envScene.add(eLight2);
+    const eLight3 = new THREE.PointLight('#ffffff', 8, 10);
+    eLight3.position.set(0, 7, 0);
+    envScene.add(eLight3);
+    scene.environment = pmremGen.fromScene(envScene).texture;
+
     // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 2.3);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
     dirLight.position.set(5, 7.5, 4.5);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 2048;
@@ -446,11 +468,11 @@
     dirLight.shadow.bias = -0.0004;
     scene.add(dirLight);
 
-    const rimLight = new THREE.DirectionalLight(currentPreset.accentColor, 0.95);
+    const rimLight = new THREE.DirectionalLight(currentPreset.accentColor, 1.2);
     rimLight.position.set(-5, 3.5, -4);
     scene.add(rimLight);
 
-    const pointLight = new THREE.PointLight(currentPreset.accentColor, 0.8, 3.5);
+    const pointLight = new THREE.PointLight(currentPreset.accentColor, 1.0, 4.0);
     pointLight.position.set(0, -0.8, 0);
     scene.add(pointLight);
 
@@ -545,11 +567,34 @@
     scene.add(platformGroup);
 
     // Floating Cube
-    const cubeGroup = new THREE.Group();
-    cubeGroup.position.set(0, 0.2, 0);
+    // Create true rounded beveled cube geometry (RoundedBox) matching React Three Fiber
+    function createRoundedBoxGeometry(width, height, depth, radius, smoothness) {
+      const shape = new THREE.Shape();
+      const eps = 0.00001;
+      const radius0 = radius - eps;
+      const w = width - radius * 2;
+      const h = height - radius * 2;
+      shape.absarc(-w / 2, -h / 2, radius, -Math.PI, -Math.PI / 2, true);
+      shape.absarc(w / 2, -h / 2, radius, -Math.PI / 2, 0, true);
+      shape.absarc(w / 2, h / 2, radius, 0, Math.PI / 2, true);
+      shape.absarc(-w / 2, h / 2, radius, Math.PI / 2, Math.PI, true);
 
-    // Create Cube with beveled edges using BoxGeometry segments or chamfer
-    const cubeGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5, 8, 8, 8);
+      const extrudeSettings = {
+        depth: depth - radius * 2,
+        bevelEnabled: true,
+        bevelSegments: smoothness * 2,
+        steps: 1,
+        bevelSize: radius0,
+        bevelThickness: radius0,
+        curveSegments: smoothness * 2
+      };
+
+      const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+      geometry.center();
+      return geometry;
+    }
+
+    const cubeGeo = createRoundedBoxGeometry(1.5, 1.5, 1.5, 0.08, 4);
     let cubeMat = createCubeMaterial();
     const cubeMesh = new THREE.Mesh(cubeGeo, cubeMat);
     cubeMesh.castShadow = true;
@@ -646,10 +691,17 @@
       const delta = clock.getDelta();
       const t = clock.getElapsedTime();
 
-      // Check hover
+      // Check hover & update dynamic glow
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObject(cubeMesh);
       isHovered = intersects.length > 0;
+      if (!isWireframe && cubeMesh.material.emissiveIntensity !== undefined) {
+        cubeMesh.material.emissiveIntensity = THREE.MathUtils.lerp(
+          cubeMesh.material.emissiveIntensity,
+          isHovered ? 0.38 : 0.08,
+          delta * 8
+        );
+      }
 
       // Rotate Cube
       if (isRotating) {
